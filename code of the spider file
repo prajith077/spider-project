@@ -1,0 +1,52 @@
+import scrapy
+import re
+
+class CleverlebenSpider(scrapy.Spider):
+    name = "cleverleben"
+    allowed_domains = ["cleverleben.at"]
+    start_urls = ["https://www.cleverleben.at/produktauswahl"]
+    item_count = 0
+    max_items = 1000
+
+    custom_settings = {
+        'FEEDS': {
+            'cleverleben_output.json': {'format': 'json', 'encoding': 'utf8'},
+            'cleverleben_output.csv': {'format': 'csv', 'encoding': 'utf8'},
+        },
+        'ROBOTSTXT_OBEY': True,
+        'USER_AGENT': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0 Safari/537.36',
+        'DOWNLOAD_DELAY': 0.5,
+    }
+
+    def parse(self, response):
+        product_links = response.css('a.productTile__link::attr(href)').getall()
+        for link in product_links:
+            if self.item_count >= self.max_items:
+                return
+            yield response.follow(link, callback=self.parse_product)
+
+        next_page = response.css('a.pagination__next::attr(href)').get()
+        if next_page and self.item_count < self.max_items:
+            yield response.follow(next_page, callback=self.parse)
+
+    def clean_text(self, text):
+        if text:
+            return re.sub(r'\s+', ' ', text).strip()
+        return ''
+
+    def parse_product(self, response):
+        if self.item_count >= self.max_items:
+            return
+        self.item_count += 1
+        yield {
+            "unique_id": response.url.split('-')[-1],
+            "product_name": self.clean_text(response.css('h1::text').get()),
+            "regular_price": self.clean_text(response.css('.price::text').re_first(r'[0-9,.]+')),
+            "pdp_url": response.url,
+            "product_description": self.clean_text(' '.join(response.css('.product-description *::text').getall())),
+            "ingredients": self.clean_text(response.xpath('//*[contains(text(),"Zutaten")]/following::text()[1]').get()),
+            "images": response.css('img::attr(src)').getall(),
+            "details": self.clean_text(response.css('.product-detail *::text').get()),
+            "currency": "€",
+            "product_id": re.search(r'([0-9]{2}-[0-9]+)', response.url).group(1) if re.search(r'([0-9]{2}-[0-9]+)', response.url) else "",
+        }
